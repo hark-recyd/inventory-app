@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#243447">
+<title>かんたん在庫管理</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#f4f6f8;color:#20252b;font-family:-apple-system,BlinkMacSystemFont,"Noto Sans JP",sans-serif}
+header{background:#243447;color:#fff;padding:18px 16px 16px;position:sticky;top:0;z-index:5}
+header h1{margin:0;font-size:20px}
+main{max-width:720px;margin:auto;padding:16px}
+.card{background:#fff;border-radius:16px;padding:18px;margin-bottom:14px;box-shadow:0 2px 10px #0000000c}
+button,input{font:inherit}
+button{border:0;border-radius:12px;padding:13px 16px;cursor:pointer}
+.primary{background:#243447;color:#fff;width:100%;font-weight:700}
+.secondary{background:#e8edf2;color:#243447}
+.row{display:flex;gap:10px}.row>*{flex:1}
+label{display:block;font-size:13px;font-weight:700;margin:12px 0 6px}
+input{width:100%;padding:13px;border:1px solid #ccd3da;border-radius:10px;background:#fff}
+.mode{display:flex;gap:8px;margin:10px 0}
+.mode button{flex:1;font-weight:700;background:#edf0f3}
+.mode .in.active{background:#d9f2df;color:#146b2d}
+.mode .out.active{background:#f9dddd;color:#a02222}
+.item-name{font-size:23px;font-weight:800;margin:4px 0}
+.stock{font-size:14px;color:#66717d}
+.stock strong{font-size:26px;color:#243447}
+#scanner{width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:12px;background:#111;display:none}
+.note{font-size:12px;color:#69737d;line-height:1.6}
+.hidden{display:none!important}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:10px 6px;border-bottom:1px solid #e6e9ec;text-align:left}
+th{color:#66717d}
+.danger{color:#a02222}
+.empty{text-align:center;color:#7b858f;padding:18px}
+#toast{position:fixed;left:16px;right:16px;bottom:18px;background:#243447;color:white;padding:13px 16px;border-radius:12px;text-align:center;display:none;z-index:20}
+.small{font-size:12px}
+</style>
+</head>
+<body>
+<header><h1>かんたん在庫管理</h1></header>
+<main>
+<section class="card">
+  <button id="scanBtn" class="primary">📷 バーコードを読み取る</button>
+  <video id="scanner" playsinline></video>
+  <p id="scanStatus" class="note">バーコードを読み取ると、登録済みの品目を表示します。</p>
+</section>
+
+<section id="itemCard" class="card hidden">
+  <div class="item-name" id="itemName"></div>
+  <div class="stock">現在庫：<strong id="currentStock">0</strong> <span id="unit"></span></div>
+  <div class="mode">
+    <button class="in active" data-mode="in">＋ 入庫</button>
+    <button class="out" data-mode="out">− 出庫</button>
+  </div>
+  <label for="qty">数量</label>
+  <input id="qty" type="number" inputmode="decimal" min="0.001" step="0.001" placeholder="例：10">
+  <button id="saveBtn" class="primary" style="margin-top:14px">登録する</button>
+  <button id="closeBtn" class="secondary" style="width:100%;margin-top:8px">閉じる</button>
+</section>
+
+<section class="card">
+  <h2 style="font-size:17px;margin:0 0 12px">在庫一覧</h2>
+  <div id="inventoryList"></div>
+</section>
+
+<section class="card">
+  <h2 style="font-size:17px;margin:0 0 8px">品目登録</h2>
+  <p class="note">バーコード番号と品目を登録しておくと、次回からバーコード読み取りだけで呼び出せます。</p>
+  <label>バーコード番号</label>
+  <input id="newBarcode" inputmode="numeric" placeholder="例：4901234567890">
+  <label>品目名</label>
+  <input id="newName" placeholder="例：カナリアシード">
+  <label>単位</label>
+  <input id="newUnit" placeholder="例：kg">
+  <label>初期在庫</label>
+  <input id="newStock" type="number" inputmode="decimal" min="0" step="0.001" value="0">
+  <button id="addBtn" class="primary" style="margin-top:14px">品目を登録</button>
+</section>
+
+<section class="card">
+  <button id="resetBtn" class="secondary" style="width:100%">すべてのデータを消去</button>
+  <p class="note" style="margin-bottom:0">※データはこのブラウザの端末内に保存されます。ブラウザのデータを消去すると在庫も消えます。</p>
+</section>
+</main>
+<div id="toast"></div>
+
+<script>
+const KEY="simple_inventory_v1";
+let data=JSON.parse(localStorage.getItem(KEY)||"{}");
+let selectedBarcode=null, mode="in", stream=null, scanning=false;
+
+const $=id=>document.getElementById(id);
+function save(){localStorage.setItem(KEY,JSON.stringify(data)); render();}
+function toast(msg){const t=$("toast");t.textContent=msg;t.style.display="block";setTimeout(()=>t.style.display="none",2200)}
+function render(){
+  const list=$("inventoryList");
+  const vals=Object.entries(data);
+  if(!vals.length){list.innerHTML='<div class="empty">まだ品目が登録されていません。</div>';return}
+  list.innerHTML="<table><thead><tr><th>品目</th><th>在庫</th><th>バーコード</th></tr></thead><tbody>"+
+    vals.map(([code,x])=>`<tr><td>${esc(x.name)}</td><td><b>${num(x.stock)}</b> ${esc(x.unit||"")}</td><td class="small">${esc(code)}</td></tr>`).join("")+
+    "</tbody></table>";
+}
+function esc(s){return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]))}
+function num(n){return Number(n).toLocaleString("ja-JP",{maximumFractionDigits:3})}
+function showItem(code){
+  selectedBarcode=code;
+  const x=data[code];
+  if(!x){toast("このバーコードは未登録です");$("itemCard").classList.add("hidden");return}
+  $("itemName").textContent=x.name;
+  $("currentStock").textContent=num(x.stock);
+  $("unit").textContent=x.unit||"";
+  $("qty").value="";
+  $("itemCard").classList.remove("hidden");
+  $("itemCard").scrollIntoView({behavior:"smooth",block:"start"});
+}
+function stopScan(){
+  scanning=false;
+  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}
+  $("scanner").style.display="none";
+  $("scanBtn").textContent="📷 バーコードを読み取る";
+}
+async function scan(){
+  if(!("BarcodeDetector" in window)){
+    toast("このブラウザはバーコード読み取りに対応していません");
+    $("scanStatus").textContent="Chrome（Android）など、BarcodeDetector対応ブラウザでお試しください。";
+    return;
+  }
+  try{
+    const detector=new BarcodeDetector();
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"}}});
+    $("scanner").srcObject=stream; await $("scanner").play();
+    $("scanner").style.display="block"; scanning=true; $("scanBtn").textContent="⏹ 読み取りを終了";
+    $("scanStatus").textContent="バーコードをカメラに映してください。";
+    const loop=async()=>{
+      if(!scanning)return;
+      try{
+        const codes=await detector.detect($("scanner"));
+        if(codes.length){
+          const code=codes[0].rawValue;
+          stopScan(); showItem(code); toast("バーコードを読み取りました");
+          return;
+        }
+      }catch(e){}
+      requestAnimationFrame(loop);
+    }; loop();
+  }catch(e){
+    toast("カメラを起動できませんでした");
+    $("scanStatus").textContent="カメラの使用許可を確認してください。HTTPSで開く必要がある場合があります。";
+  }
+}
+$("scanBtn").onclick=()=>scanning?stopScan():scan();
+document.querySelectorAll(".mode button").forEach(b=>b.onclick=()=>{
+  mode=b.dataset.mode;
+  document.querySelectorAll(".mode button").forEach(x=>x.classList.remove("active"));
+  b.classList.add("active");
+});
+$("saveBtn").onclick=()=>{
+  if(!selectedBarcode||!data[selectedBarcode])return;
+  const q=Number($("qty").value);
+  if(!(q>0)){toast("数量を入力してください");return}
+  const x=data[selectedBarcode];
+  if(mode==="out" && q>x.stock){toast("在庫数を超える出庫はできません");return}
+  x.stock=mode==="in"?x.stock+q:x.stock-q;
+  save(); showItem(selectedBarcode); toast(mode==="in"?"入庫しました":"出庫しました");
+};
+$("closeBtn").onclick=()=>{$("itemCard").classList.add("hidden");selectedBarcode=null};
+$("addBtn").onclick=()=>{
+  const code=$("newBarcode").value.trim(), name=$("newName").value.trim(), unit=$("newUnit").value.trim(), stock=Number($("newStock").value);
+  if(!code||!name){toast("バーコード番号と品目名を入力してください");return}
+  if(data[code] && !confirm("このバーコードは登録済みです。上書きしますか？"))return;
+  data[code]={name,unit,stock:Number.isFinite(stock)&&stock>=0?stock:0};
+  save(); $("newBarcode").value="";$("newName").value="";$("newUnit").value="";$("newStock").value="0";
+  toast("品目を登録しました");
+};
+$("resetBtn").onclick=()=>{
+  if(confirm("すべての品目・在庫データを消去します。よろしいですか？")){
+    data={};save();$("itemCard").classList.add("hidden");toast("データを消去しました");
+  }
+};
+render();
+</script>
+</body>
+</html>
